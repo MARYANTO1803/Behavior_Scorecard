@@ -1,0 +1,418 @@
+---
+title: 'Credit Scorecard'
+author: "Maryanto"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    theme: united
+    highlight: tango
+    toc: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+    number_sections: true
+    df_print: paged
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+# clear-up the environment
+rm(list = ls())
+
+# chunk options
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  comment = "#>"
+)
+
+options(scipen = 10)
+```
+
+## Library loading  
+
+```{r}
+source("setup.R")
+```
+## Read Data
+
+```{r}
+# read data
+data <- read_xlsx("credit_taiwan.xlsx")
+data
+```
+
+Dataset memiliki 25 kolom dan 30,952 dengan penjelasan sebagai berikut:
+
+- `id`        = id debitur
+- `limit_bal` = Besaran kredit limit yang diberikan dalam dolar NT
+- `sex`       = jenis kelamin 
+    - 1 = laki-laki
+    - 2 = perempuan 
+- `education` = Pendidikan terakhir 
+    - 1 = pascasarjana (s2 & s3)
+    - 2 = universitas (s1)
+    - 3 = high school (SMA) 
+    - 4 = lain-lain
+- `marriage`  = Status pernikahan 
+    - 1 = menikah
+    - 2 = lajang
+    - 3 = lainnya
+- `age` = Usia dalam tahun
+- `pay_*` = Status pembayaran dalam bulan April (1) - September (6).
+    - 0 = pembayaran tepat waktu
+    - 1 = keterlambatan pembayaran satu bulan
+    - 2 = keterlambatan pembayaran dua bulan
+    - ...
+    - 8 = keterlambatan pembayaran delapan bulan atau lebih
+- `bill_amt*` = Jumlah tagihan pada bulan April (1) - September (6) dalam dolar NT 
+- `pay_amt*`  = Jumlah pembayaran/pengeluaran sebelumnya pada bulan April (1) - September(6) dalam dolar NT
+- `gb_flag` = Flagging pembayaran default (gagal bayar) pada bulan berikutnya 
+    - 1 = default
+    - 0 = not default
+
+## Data Cleansing & Simple EDA
+
+```{r}
+# your code here
+data_clean <- data %>% 
+  select(-id)
+```
+
+```{r}
+# cek glimpse
+glimpse(data_clean)
+```
+
+```{r}
+# your code here
+data_clean <- data_clean %>% 
+  mutate(sex = as.factor(sex),
+         education = as.factor(education),
+         marriage = as.factor(marriage))
+glimpse(data_clean)
+```
+
+```{r}
+# your code here
+describe(data_clean)
+```
+
+## Data Pre-Processing
+
+### Mengecek Distribusi Variabel Target
+
+```{r}
+# prop table
+table(data_clean$gb_flag) %>% 
+  prop.table()
+```
+
+### Cross Validation
+
+```{r}
+RNGkind(sample.kind= "Rounding")
+set.seed(123) # mengunci kerandoman data
+
+# membuat binary split data menjadi set data training dan testing dengan proporsi 80:20
+splitter <- initial_split(data = data_clean,
+                          prop = 0.8) # data train
+
+# splitting
+train <- training(splitter)
+test <- testing(splitter)
+```
+
+```{r}
+table(train$gb_flag) %>% 
+  prop.table()
+```
+
+## Initial Characteristic Analysis
+
+### Weight of Evidence (WoE) or Fine Classing
+
+```{r}
+# your code here
+binning <- woebin(dt = train,
+                  y = 'gb_flag',
+                  positive = 0)
+binning
+```
+
+### Mengubah dataframe ke dalam WOE
+
+```{r}
+# data train
+train_woe <- woebin_ply(dt = train,
+                        bins = binning)
+train_woe
+```
+
+```{r}
+# data test
+test_woe <- woebin_ply(dt = test,
+                        bins = binning)
+```
+
+### Information Value (IV)
+
+```{r}
+# your code here
+iv(dt = train_woe,
+   y ='gb_flag',
+   positive = 0)
+```
+
+Menurut (Siddiqi, Naeem), skor IV dapat dikategorikan menjadi nilai berikut:
+
+- IV dibawah 0.02 -> unpredictive
+- IV diantara 0.02 - 0.1 -> ‘weak’
+- IV diantara 0.1 sampai 0.3 dikategorikan sebagai ‘medium’
+- IV diatas 0.3 dikategorikan sebagai ‘strong’
+
+❓ Nilai IV yang sudah kita dapat digunakan sebagai feature elimination, variabel apa saja yang akan dieliminasi?
+
+- sex
+- marriage
+
+```{r}
+# hasil data setelah feature elimination
+train_woe_final <- train_woe %>% 
+  select(-c(sex_woe, marriage_woe))
+  
+test_woe_final <- test_woe %>% 
+  select(-c(sex_woe, marriage_woe))
+```
+
+### Logical Trend and Business Consideration / Coarse Classing
+
+```{r}
+# logical trend plot
+plot <- woebin_plot(bins = binning)
+plot
+```
+
+```{r}
+# pay 1
+plot$pay_1
+```
+
+## Modeling - Logistic Regression
+
+### Logistic Regression Model
+
+```{r, eval=FALSE}
+# fitting model
+model <- glm(formula = gb_flag ~ .,
+             data = train_woe_final,
+             family = "binomial")
+
+# save model
+saveRDS(model, file = "model.RDS")
+```
+
+```{r}
+# load model
+model <- readRDS("model.RDS")
+```
+
+```{r}
+summary(model)
+```
+
+### Model Asumsi - Multikolinearitas
+
+```{r}
+vif(model)
+```
+
+```{r}
+# Melakukan prediksi pada data test
+test_woe_final$pred_risk <- predict(object = model,
+                                    newdata = test_woe_final,
+                                    type = "response")
+test_woe_final
+```
+
+## Evaluation Model
+
+```{r}
+list_pred <- list(test = test_woe_final$pred_risk)
+```
+
+```{r}
+list_label <- list(test = test_woe_final$gb_flag)
+```
+
+```{r}
+perf_eva(pred = list_pred,
+         label = list_label,
+         confusion_matrix = TRUE,
+         threshold = 0.5,
+         show_plot = c("ks", "roc"))
+```
+
+### KS Statistics
+
+> nilai KS > 0.4 dianggap baik dalam kredit scoring.
+
+### AUC Score 
+
+- Modelnya memiliki AUC sebesar 0.8853731, model mampu membedakan antara kelas default dengan not default dari yang aktualnya default/not default sebesar 88.5% 
+  
+## Scorecard Creation
+
+```{r}
+# membentuk scorecard
+score_card <- scorecard(bins = binning, 
+                        model = model,
+                        odds0 = 1/19,
+                        points0 = 600,
+                        pdo = 20)
+score_card
+```
+
+```{r}
+# scorecard tunning
+score_card_tunning <- scorecard(bins = binning, 
+                        model = model,
+                        odds0 = 1/100,
+                        points0 = 600,
+                        pdo = 20)
+score_card_tunning
+```
+
+### Mengubah Karakteristik menjadi Score
+
+```{r}
+train %>% head()
+```
+
+```{r}
+score_train <- scorecard_ply(dt = train,
+                       card = score_card,
+                       only_total_score = F)
+score_train %>% head()
+```
+
+
+```{r}
+score_test <- scorecard_ply(dt = test,
+                       card = score_card,
+                       only_total_score = F)
+score_test %>% head()
+```
+
+## Performance Evaluation Scorecard using `perf_psi()`
+
+```{r}
+score_list <- list(train = score_train$score, 
+                   test = score_test$score)
+```
+
+```{r}
+label_list <- list(train = train_woe_final$gb_flag, 
+                   test = test_woe_final$gb_flag)
+```
+
+```{r}
+psi <- perf_psi(score = score_list, 
+                label = label_list, 
+                positive = 0)
+psi$psi # psi data frame
+```
+
+## Cutoff
+
+```{r}
+# using score test
+approval_rate(score = score_test$score,
+              label = test_woe_final$gb_flag,
+              positive = 0)
+```
+
+## Predict Score
+
+```{r}
+new_data <- data.frame(list(
+  limit_bal = 90000, education = 1, age = 49,
+  pay_1 = 0, pay_2 = 0, pay_3 = 0, 
+  pay_4 = 0, pay_5 = 0, pay_6 = 0,
+  bill_amt1 = 15093, bill_amt2 = 20356,
+  bill_amt3 = 14223, bill_amt4 = 12383,
+  bill_amt5 = 9874, bill_amt6 = 10563,
+  pay_amt1 = 3345, pay_amt2 = 3505,
+  pay_amt3 = 4021, pay_amt4 = 4579,
+  pay_amt5 = 3041, pay_amt6 = 2312
+))
+
+new_data
+```
+
+Jika ada data NA
+
+```{r}
+new_data_NA <- data.frame(list(
+  limit_bal = 90000, education = NA, age = 49,
+  pay_1 = 0, pay_2 = 0, pay_3 = 0, 
+  pay_4 = 0, pay_5 = 0, pay_6 = 0,
+  bill_amt1 = 15093, bill_amt2 = 20356,
+  bill_amt3 = 14223, bill_amt4 = 12383,
+  bill_amt5 = 9874, bill_amt6 = 10563,
+  pay_amt1 = 3345, pay_amt2 = 3505,
+  pay_amt3 = 4021, pay_amt4 = 4579,
+  pay_amt5 = 3041, pay_amt6 = 2312
+))
+
+new_data_NA
+```
+
+```{r}
+# predict behaviour
+result <- predict_behaviour(data = new_data, 
+                  score_card = score_card, 
+                  cutoff = 539)
+result
+```
+
+```{r}
+predict_behaviour(data = new_data, 
+                  score_card = score_card, 
+                  cutoff = 527)
+```
+
+Contoh yang ada NA.
+
+```{r}
+predict_behaviour(data = new_data_NA, 
+                  score_card = score_card, 
+                  cutoff = 527)
+```
+
+```{r}
+# column bind
+cbind(new_data, result)
+```
+
+# Inclass Question
+
+```{r}
+var_filter(train_woe, y = "gb_flag", lims = list(info_value = 0.02))
+```
+
+# Tambahan
+
+```{r, warning=FALSE, eval=FALSE}
+# import ke xlsx
+library(writexl)
+#write_xlsx(scorecard_539, "data_input/scorecard_539.xlsx")
+#write_xlsx(scorecard_527, "data_input/scorecard_527.xlsx")
+```
+
+```{r}
+library(rsconnect)
+```
+
+

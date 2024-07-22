@@ -1,0 +1,12 @@
+name: berhavior_scorecard_upload
+title: berhavior_scorecard_upload
+username: mere1803
+account: mere1803
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 12347374
+bundleId: 8890836
+url: https://mere1803.shinyapps.io/berhavior_scorecard_upload/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
